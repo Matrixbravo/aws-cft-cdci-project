@@ -1,0 +1,63 @@
+name: Deploy AWS Resources
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.x
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Set a unique identifier for S3 bucket
+        id: set_bucket_name
+        run: echo "s3bucket-$GITHUB_RUN_ID" >> $GITHUB_ENV
+
+      - name: Check if S3 bucket already exists
+        id: check_s3_bucket
+        run: |
+          aws s3api head-bucket --bucket ${{ env.BUCKET_NAME }} --region your-region || echo "Bucket does not exist"
+          echo "::set-output name=bucket_exists::$(if [ $? -eq 0 ]; then echo true; else echo false; fi)"
+
+      - name: Create S3 bucket if it doesn't exist
+        run: |
+          if [ "${{ steps.check_s3_bucket.outputs.bucket_exists }}" == "false" ]; then
+            aws s3api create-bucket --bucket ${{ env.BUCKET_NAME }} --region your-region
+          fi
+
+      - name: Package Lambda function
+        run: |
+          cd $GITHUB_WORKSPACE
+          zip -r lambda_function.zip lambda/*.py
+          aws s3 cp lambda_function.zip s3://${{ env.BUCKET_NAME }}/
+
+      - name: Check if Lambda function already exists
+        id: check_lambda_function
+        run: |
+          aws lambda get-function --function-name your-lambda-function-name --region your-region || echo "Lambda function does not exist"
+          echo "::set-output name=lambda_exists::$(if [ $? -eq 0 ]; then echo true; else echo false; fi)"
+
+      - name: Deploy or Create Lambda function
+        run: |
+          if [ "${{ steps.check_lambda_function.outputs.lambda_exists }}" == "true" ]; then
+            aws lambda update-function-code --function-name your-lambda-function-name --s3-bucket ${{ env.BUCKET_NAME }} --s3-key lambda_function.zip --region your-region
+          else
+            aws lambda create-function --function-name your-lambda-function-name --runtime python3.8 --role your-lambda-role-arn --handler lambda_function.lambda_handler --code S3Bucket=${{ env.BUCKET_NAME }},S3Key=lambda_function.zip --region your-region
+          fi
+
+      - name: Trigger Lambda function
+        run: |
+          aws lambda invoke --function-name your-lambda-function-name --region your-region output.txt
